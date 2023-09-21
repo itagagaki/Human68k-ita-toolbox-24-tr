@@ -6,6 +6,15 @@
 * Itagaki Fumihiko 08-Sep-93  シフトJIS対応．-S オプション廃止，-1 オプション追加
 * Itagaki Fumihiko 08-Sep-93  -N オプション，-B オプション，-C オプションを追加
 * 1.1
+* Itagaki Fumihiko 08-Jan-94  引数の文字列の解釈の不具合を修正．
+*                             o 引数の文字列の最後の文字が‘\’である場合，その‘\’を無視して
+*                               いたが，文字‘\’として解釈するよう変更．
+*                             o 引数の文字列中に，シフトJIS 1バイト目と見なし得るバイトに続いて
+*                               シフトJIS 2バイト目と見なし得ないバイトがある場合，1バイト目を
+*                               無視してしまい，2バイト目を 1文字として解釈してしまっていた．
+*                             o 2バイト目が‘\’であるシフトJIS 2バイト文字があると，正しく解釈
+*                               されなかった．
+* 1.2
 *
 * Usage: tr [ -b ] [ -1BCNZ ] [ -cds ] [ -- ] [ 文字列１ [ 文字列２ ] ]
 *
@@ -497,10 +506,29 @@ scan1char_bsd_ok1:
 		bra	scan1char_done
 ****************
 scan1char_1:
-		move.l	d2,-(a7)
-		bsr	scan1char_2
-		bmi	scan1char_1_return
+		moveq	#0,d0
+		move.b	(a0),d0
+		beq	scan1char_1_eos
 
+		movem.l	d2/a1,-(a7)
+		btst	#FLAG_1,d5
+		bne	scan1char_1_not_sjis
+
+		bsr	issjis
+		bne	scan1char_1_not_sjis
+
+		addq.l	#1,a0
+		move.w	d0,d2
+		move.b	(a0),d0
+		bsr	issjis2
+		exg	d0,d2
+		bne	scan1char_1_return
+
+		addq.l	#1,a0
+		bra	scan1char_1_return_sjis
+
+scan1char_1_not_sjis:
+		bsr	scan1char_2
 		btst	#FLAG_1,d5
 		bne	scan1char_1_return
 
@@ -508,18 +536,29 @@ scan1char_1:
 		bne	scan1char_1_return
 
 		move.w	d0,d2
+		movea.l	a0,a1
 		bsr	scan1char_2
+		exg	a0,a1
+		exg	d0,d2
 		bmi	scan1char_1_return
 
+		exg	d0,d2
 		bsr	issjis2
+		exg	d0,d2
 		bne	scan1char_1_return
 
-		lsl.w	#8,d2
+		movea.l	a1,a0
+scan1char_1_return_sjis:
+		lsl.w	#8,d0
 		or.w	d2,d0
 		bsr	sjis_to_icode
 scan1char_1_return:
-		move.l	(a7)+,d2
-		tst.w	d1
+		movem.l	(a7)+,d2/a1
+		moveq	#0,d1
+		rts
+
+scan1char_1_eos:
+		moveq	#-1,d1
 		rts
 ****************
 scan1char_2:
@@ -530,9 +569,10 @@ scan1char_2:
 		cmp.b	#'\',d0
 		bne	scan1char_2_ok
 
-		move.b	(a0)+,d0
-		beq	scan1char_2_eos
+		tst.b	(a0)
+		beq	scan1char_2_ok
 
+		move.b	(a0)+,d0
 		cmp.b	#'0',d0
 		blo	scan1char_2_ok
 
@@ -928,16 +968,17 @@ issjis2:
 		cmp.b	#$40,d0
 		blo	return			* ZF=0
 
-		cmp.b	#$7e,d0
-		bls	true
-
-		cmp.b	#$80,d0
-		blo	return			* ZF=0
+		cmp.b	#$7f,d0
+		beq	false
 
 		cmp.b	#$fc,d0
 		bhi	return			* ZF=0
 true:
 		cmp.b	d0,d0			* ZF=1
+		rts
+
+false:
+		tst.b	d0
 return:
 		rts
 *****************************************************************
@@ -964,7 +1005,7 @@ malloc:
 .data
 
 	dc.b	0
-	dc.b	'## tr 1.1 ##  Copyright(C)1993 by Itagaki Fumihiko',0
+	dc.b	'## tr 1.2 ##  Copyright(C)1993-94 by Itagaki Fumihiko',0
 
 msg_myname:		dc.b	'tr: ',0
 msg_no_memory:		dc.b	'メモリが足りません',CR,LF,0
